@@ -7,20 +7,21 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 import tempfile
 
 
-ROOT = Path(__file__).resolve().parents[3]
-PACKAGE = ROOT / "official" / "compress"
+PACKAGE = Path(__file__).resolve().parents[1]
 
 
 class QualificationError(RuntimeError):
     pass
 
 
-def run(argv: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         argv,
         cwd=cwd,
@@ -38,39 +39,122 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> sub
     return result
 
 
-def pkg_config(package: str, mode: str) -> list[str]:
-    tool = shutil.which("pkg-config")
-    if tool is None:
-        raise QualificationError("official/compress requires pkg-config for qualification")
-    return run([tool, mode, package], cwd=ROOT).stdout.split()
+def find_tool(name: str, env: dict[str, str]) -> str | None:
+    return shutil.which(name, path=env.get("PATH"))
 
 
-def verify_zstd_version() -> None:
-    tool = shutil.which("pkg-config")
+def pkg_config(package: str, mode: str, env: dict[str, str]) -> list[str]:
+    tool = find_tool("pkg-config", env)
     if tool is None:
         raise QualificationError("official/compress requires pkg-config for qualification")
-    res = subprocess.run([tool, "--atleast-version=1.4.0", "libzstd"], cwd=ROOT)
+    return shlex.split(run([tool, mode, package], cwd=PACKAGE, env=env).stdout)
+
+
+def verify_zstd_version(env: dict[str, str]) -> None:
+    tool = find_tool("pkg-config", env)
+    if tool is None:
+        raise QualificationError("official/compress requires pkg-config for qualification")
+    res = subprocess.run(
+        [tool, "--atleast-version=1.4.0", "libzstd"],
+        cwd=PACKAGE,
+        env=env,
+        timeout=120,
+    )
     if res.returncode != 0:
         raise QualificationError("official/compress requires libzstd >= 1.4.0 (pkg-config --atleast-version=1.4.0 libzstd failed)")
 
 
-def optional_pkg_libs(package: str) -> list[str]:
-    tool = shutil.which("pkg-config")
+def optional_pkg_libs(package: str, env: dict[str, str]) -> list[str]:
+    tool = find_tool("pkg-config", env)
     if tool is None:
         return []
     result = subprocess.run(
-        [tool, "--libs", package], cwd=ROOT, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        [tool, "--libs", package], cwd=PACKAGE, env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120,
     )
-    return result.stdout.split() if result.returncode == 0 else []
+    return shlex.split(result.stdout) if result.returncode == 0 else []
 
 
-def make_sdk(work: Path) -> Path:
+def resolve_toolchain(env: dict[str, str]) -> tuple[Path, Path, Path, Path, Path]:
+    root_is_set = "TOKA_ROOT" in env
+    explicit_keys = ("TOKA", "TOKAC", "TOKA_LIB")
+    explicit_set = [key for key in explicit_keys if key in env]
+    if root_is_set and explicit_set:
+        raise QualificationError(
+            "set either TOKA_ROOT or TOKA/TOKAC/TOKA_LIB, not both"
+        )
+    if root_is_set:
+        if not env["TOKA_ROOT"].strip():
+            raise QualificationError("TOKA_ROOT must not be empty")
+        root = Path(env["TOKA_ROOT"]).expanduser().resolve()
+        toka = root / "build" / "bin" / "toka"
+        tokac = root / "build" / "bin" / "tokac"
+        library = root / "lib"
+        runtime = library / "sys" / "toka_rt.o"
+        build_driver = root / "tools" / "scripts" / "toka_build.py"
+    else:
+        if len(explicit_set) != len(explicit_keys):
+            missing = ", ".join(key for key in explicit_keys if key not in env)
+            raise QualificationError(
+                "set TOKA_ROOT or all of TOKA/TOKAC/TOKA_LIB"
+                + (" (missing: " + missing + ")" if missing else "")
+            )
+        empty = [key for key in explicit_keys if not env[key].strip()]
+        if empty:
+            raise QualificationError("toolchain variables must not be empty: " + ", ".join(empty))
+        toka = Path(env["TOKA"]).expanduser().resolve()
+        tokac = Path(env["TOKAC"]).expanduser().resolve()
+        library = Path(env["TOKA_LIB"]).expanduser().resolve()
+        runtime = library / "sys" / "toka_rt.o"
+        build_driver = library / "toolchain" / "toka_build.py"
+
+    required_files = {
+        "toka": toka,
+        "tokac": tokac,
+        "toka_rt.o": runtime,
+        "toka_build.py": build_driver,
+    }
+    missing_files = [name for name, path in required_files.items() if not path.is_file()]
+    if not library.is_dir():
+        missing_files.append("TOKA_LIB")
+    if missing_files:
+        raise QualificationError(
+            "incomplete Toka toolchain (missing: %s)" % ", ".join(missing_files)
+        )
+    return toka, tokac, library, runtime, build_driver
+
+
+def compiler_command(env: dict[str, str]) -> list[str]:
+    configured = env.get("CC")
+    if configured is not None:
+        command = shlex.split(configured)
+        if not command:
+            raise QualificationError("CC must name a C compiler")
+        resolved = find_tool(command[0], env)
+        if resolved is None:
+            raise QualificationError("CC compiler was not found: " + command[0])
+        command[0] = resolved
+        return command
+    for candidate in ("clang-20", "clang"):
+        resolved = find_tool(candidate, env)
+        if resolved is not None:
+            return [resolved]
+    raise QualificationError("official/compress requires CC, clang-20, or clang")
+
+
+def make_sdk(work: Path, source_library: Path, runtime: Path, build_driver: Path) -> Path:
     library = work / "sdk" / "lib"
-    shutil.copytree(ROOT / "lib", library)
+    shutil.copytree(
+        source_library,
+        library,
+        ignore=shutil.ignore_patterns("*.pyc", "__pycache__"),
+    )
+    runtime_dir = library / "sys"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(runtime, runtime_dir / "toka_rt.o")
     toolchain = library / "toolchain"
-    toolchain.mkdir(exist_ok=True)
-    shutil.copy2(ROOT / "tools" / "scripts" / "toka_build.py", toolchain / "toka_build.py")
+    toolchain.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(build_driver, toolchain / "toka_build.py")
     return library
 
 
@@ -141,81 +225,91 @@ def write_plain_http_consumer(project: Path) -> None:
     )
 
 
-def link_program(compiler: str, ir: Path, bridges: list[Path], output: Path) -> None:
-    args = [compiler, str(ir), *[str(b) for b in bridges], str(ROOT / "lib" / "sys" / "toka_rt.o"),
-            "-o", str(output), *pkg_config("zlib", "--libs"), *pkg_config("libzstd", "--libs")]
-    args.extend(optional_pkg_libs("openssl"))
+def link_program(compiler: list[str], runtime: Path, ir: Path, bridges: list[Path],
+                 output: Path, env: dict[str, str]) -> None:
+    args = [*compiler, str(ir), *[str(b) for b in bridges], str(runtime),
+            "-o", str(output), *pkg_config("zlib", "--libs", env),
+            *pkg_config("libzstd", "--libs", env)]
+    args.extend(optional_pkg_libs("openssl", env))
     if platform.system() == "Darwin":
-        sdk = run(["xcrun", "--show-sdk-path"], cwd=ROOT).stdout.strip()
+        sdk = run(["xcrun", "--show-sdk-path"], cwd=PACKAGE, env=env).stdout.strip()
         args.extend(["-isysroot", sdk])
-    run(args, cwd=ROOT)
+    run(args, cwd=PACKAGE, env=env)
 
 
-def compile_and_run(tokac: Path, sdk: Path, package: Path, source: Path,
-                    bridges: list[Path], output: Path) -> None:
+def compile_and_run(tokac: Path, compiler: list[str], runtime: Path, sdk: Path,
+                    package: Path, source: Path, bridges: list[Path], output: Path,
+                    env: dict[str, str]) -> None:
     ir = output.with_suffix(".ll")
     run([str(tokac), "-I", str(sdk), "-I", str(package / "lib"),
-         "--emit-llvm", str(source), "-o", str(ir)], cwd=ROOT)
-    compiler = os.environ.get("CC") or shutil.which("clang")
-    if compiler is None:
-        raise QualificationError("official/compress requires clang or CC for native qualification")
-    link_program(compiler, ir, bridges, output)
-    run([str(output)], cwd=ROOT)
+         "--emit-llvm", str(source), "-o", str(ir)], cwd=PACKAGE, env=env)
+    link_program(compiler, runtime, ir, bridges, output, env)
+    run([str(output)], cwd=PACKAGE, env=env)
 
 
-def assert_no_zstd_linkage(program: Path) -> None:
+def assert_no_compression_linkage(program: Path, env: dict[str, str]) -> None:
     if platform.system() == "Darwin":
-        tool = shutil.which("otool")
-        if tool:
-            res = run([tool, "-L", str(program)], cwd=ROOT)
-            if "zstd" in res.stdout.lower():
-                raise QualificationError("plain_http_consumer improperly linked libzstd: " + res.stdout)
+        tool = find_tool("otool", env)
+        if tool is None:
+            raise QualificationError("otool is required for the macOS negative linkage check")
+        res = run([tool, "-L", str(program)], cwd=PACKAGE, env=env)
+        pattern = r"(?:^|/)(?:libzstd|libz)(?:\.\d+)*\.dylib(?:\s|$)"
+    elif platform.system() == "Linux":
+        tool = find_tool("readelf", env)
+        if tool is None:
+            raise QualificationError("readelf is required for the Linux negative linkage check")
+        res = run([tool, "-d", str(program)], cwd=PACKAGE, env=env)
+        pattern = r"\(needed\).*\[(?:libzstd|libz)\.so(?:\.[^]]+)*\]"
     else:
-        tool = shutil.which("ldd")
-        if tool:
-            res = run([tool, str(program)], cwd=ROOT)
-            if "zstd" in res.stdout.lower():
-                raise QualificationError("plain_http_consumer improperly linked libzstd: " + res.stdout)
+        raise QualificationError("negative linkage qualification supports only Linux and macOS")
+    if re.search(pattern, res.stdout, flags=re.IGNORECASE | re.MULTILINE):
+        raise QualificationError(
+            "plain_http_consumer directly linked libz or libzstd:\n" + res.stdout
+        )
 
 
 def main() -> int:
-    verify_zstd_version()
-    toka = ROOT / "build" / "bin" / "toka"
-    tokac = ROOT / "build" / "bin" / "tokac"
-    runtime = ROOT / "lib" / "sys" / "toka_rt.o"
-    compiler = os.environ.get("CC") or shutil.which("clang")
-    if not toka.is_file() or not tokac.is_file() or not runtime.is_file() or compiler is None:
-        raise QualificationError("build toka, tokac, and lib/sys/toka_rt.o before qualifying official/compress")
+    host_env = dict(os.environ)
+    toka, tokac, source_library, runtime, build_driver = resolve_toolchain(host_env)
+    compiler = compiler_command(host_env)
+    host_env["CC"] = shlex.join(compiler)
+    verify_zstd_version(host_env)
 
     with tempfile.TemporaryDirectory(prefix="toka-compress-package-") as temporary:
         work = Path(temporary)
-        sdk = make_sdk(work)
+        sdk = make_sdk(work, source_library, runtime, build_driver)
+        sdk_runtime = sdk / "sys" / "toka_rt.o"
+        base_env = dict(host_env)
+        base_env.update({"TOKAC": str(tokac), "TOKA_LIB": str(sdk)})
+        base_env.pop("TOKA_ROOT", None)
+        base_env.pop("TOKA", None)
         dependency = work / "compress"
-        shutil.copytree(PACKAGE, dependency)
+        shutil.copytree(PACKAGE, dependency, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
 
         bridge_zlib = work / "compress_zlib.o"
-        run([compiler, "-Wall", "-Wextra", "-Werror", "-c",
+        run([*compiler, "-Wall", "-Wextra", "-Werror", "-c",
              str(dependency / "native" / "compress_zlib.c"), "-o", str(bridge_zlib),
-             *pkg_config("zlib", "--cflags")], cwd=ROOT)
+             *pkg_config("zlib", "--cflags", base_env)], cwd=PACKAGE, env=base_env)
 
         bridge_zstd = work / "compress_zstd.o"
-        run([compiler, "-Wall", "-Wextra", "-Werror", "-c",
+        run([*compiler, "-Wall", "-Wextra", "-Werror", "-c",
              str(dependency / "native" / "compress_zstd.c"), "-o", str(bridge_zstd),
-             *pkg_config("libzstd", "--cflags")], cwd=ROOT)
+             *pkg_config("libzstd", "--cflags", base_env)], cwd=PACKAGE, env=base_env)
 
         bridges = [bridge_zlib, bridge_zstd]
 
-        compile_and_run(tokac, sdk, dependency, dependency / "tests" / "compress_v1.tk",
-                        bridges, work / "compress_v1")
-        compile_and_run(tokac, sdk, dependency, dependency / "tests" / "zstd_v1.tk",
-                        bridges, work / "compress_zstd_v1")
-        compile_and_run(tokac, sdk, dependency, dependency / "tests" / "http_v1.tk",
-                        bridges, work / "compress_http_v1")
+        compile_and_run(tokac, compiler, sdk_runtime, sdk, dependency,
+                        dependency / "tests" / "compress_v1.tk", bridges,
+                        work / "compress_v1", base_env)
+        compile_and_run(tokac, compiler, sdk_runtime, sdk, dependency,
+                        dependency / "tests" / "zstd_v1.tk", bridges,
+                        work / "compress_zstd_v1", base_env)
+        compile_and_run(tokac, compiler, sdk_runtime, sdk, dependency,
+                        dependency / "tests" / "http_v1.tk", bridges,
+                        work / "compress_http_v1", base_env)
 
         project = work / "consumer"
         write_consumer(project, dependency)
-        base_env = dict(os.environ)
-        base_env.update({"TOKAC": str(tokac), "TOKA_LIB": str(sdk)})
         run([str(toka), "fetch"], cwd=project, env=base_env)
         lock = project / "package.lock"
         locked = lock.read_bytes()
@@ -239,12 +333,13 @@ def main() -> int:
         no_zlib_pkg_config.mkdir()
         plain_env = dict(base_env)
         plain_env["PKG_CONFIG_LIBDIR"] = str(no_zlib_pkg_config)
+        plain_env["PKG_CONFIG_PATH"] = ""
         run([str(toka), "build"], cwd=plain, env=plain_env)
         plain_program = plain / "target" / "debug" / "plain_http_consumer"
         if not plain_program.is_file():
             raise QualificationError("plain HTTP consumer did not build without zlib/zstd package discovery")
         run([str(plain_program)], cwd=plain, env=plain_env)
-        assert_no_zstd_linkage(plain_program)
+        assert_no_compression_linkage(plain_program, plain_env)
 
     print(json.dumps({
         "result": "pass",

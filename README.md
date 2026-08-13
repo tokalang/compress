@@ -80,8 +80,9 @@ Import this module only in applications that choose the compression policy.
 ## Qualification
 
 The required qualification toolchain is the published Toka `v1.0.0-rc.4` SDK.
-Install zlib, libzstd 1.4.0 or newer, pkg-config, and Clang, then provide either
-an installed SDK explicitly:
+Install zlib, libzstd 1.4.0 or newer, OpenSSL, pkg-config, Clang, and the host
+binary inspection tool (`otool` on macOS or `readelf` on Linux), then provide
+either an installed SDK explicitly:
 
 ```sh
 TOKA=/path/to/bin/toka \
