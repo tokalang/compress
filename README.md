@@ -1,14 +1,13 @@
 # `official/compress`
 
-Official opt-in compression package for Toka. Package version `0.1.0` is a
-release candidate and has not yet been published. This document describes API
-profile v1.2.
+Official opt-in compression package for Toka. Package version `0.1.0` is the
+first standalone release line. This document describes API profile v1.2.
 
 ## Migration status
 
-This repository is undergoing standalone qualification and is not yet the
-canonical package source. Until qualification, release, and locked registry
-consumer replay are complete, the authoritative source remains
+This repository has completed standalone qualification. Its `v0.1.0` tag,
+immutable catalog entry, and locked registry consumer replay form the one-way
+cutover gate. Until that gate is complete, the authoritative source remains
 [`tokalang/toka/official/compress`](https://github.com/tokalang/toka/tree/main/official/compress).
 
 Cutover will be one-way. The compiler repository copy will be removed after a
