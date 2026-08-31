@@ -1,6 +1,7 @@
 # `official/compress`
 
-Official opt-in compression package for Toka. Package version `0.1.0` is the
+Official opt-in compression package for Toka. Package version `0.1.1` is the
+RC9 compatibility release; it preserves the `0.1.0` API and native ABI. `0.1.0` was the
 first standalone release line. This document describes API profile v1.2.
 
 ## Migration status
@@ -78,7 +79,7 @@ Import this module only in applications that choose the compression policy.
 
 ## Qualification
 
-The required qualification toolchain is the published Toka `v1.0.0-rc.4` SDK.
+The required qualification toolchain is the published Toka `v1.0.0-rc.9` SDK.
 Install zlib, libzstd 1.4.0 or newer, OpenSSL, pkg-config, Clang, and the host
 binary inspection tool (`otool` on macOS or `readelf` on Linux), then provide
 either an installed SDK explicitly:

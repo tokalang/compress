@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  TOKA_VERSION: v1.0.0-rc.4
+  TOKA_VERSION: v1.0.0-rc.9
 
 jobs:
   qualify:
@@ -30,12 +30,12 @@ jobs:
         include:
           - name: linux-x64
             runner: ubuntu-22.04
-            asset: toka-v1.0.0-rc.4-linux-x64.tar.gz
-            sha256: fee16678f67bb88ace9b0f31603f9b56a24802de6d16a5bca60b3714dd4d30f6
+            asset: toka-v1.0.0-rc.9-linux-x64.tar.gz
+            sha256: 432b27087a89d2519e1a50726ed31f6556e4ed130e3d91c2315713c1cd099097
           - name: macos-arm64
             runner: macos-15
-            asset: toka-v1.0.0-rc.4-macos-arm64.tar.gz
-            sha256: f5e9043af6f650bca42e95d22fda28c6814413faa4bf9478decfeb884d4d0866
+            asset: toka-v1.0.0-rc.9-macos-arm64.tar.gz
+            sha256: d13622ffad63db32479db78095bf66b96b4976c0d15aa6c30257e676d66f64ac
 
     steps:
       - uses: actions/checkout@v4
@@ -92,8 +92,8 @@ jobs:
       - name: Verify locked toolchain
         run: |
           set -euo pipefail
-          "$TOKA" --version | grep -F "1.0.0-rc.4"
-          "$TOKAC" --version | grep -F "1.0.0-rc.4"
+          "$TOKA" --version | grep -F "1.0.0-rc.9"
+          "$TOKAC" --version | grep -F "1.0.0-rc.9"
           pkg-config --exists zlib
           pkg-config --atleast-version=1.4.0 libzstd
 
