@@ -8,7 +8,7 @@ extern fn toka_compress_live_handle_count() -> i32
 
 fn selection_is(cede value: Result<HttpContentEncoding, HttpCompressionError>, expected: i32) -> bool {
     match cede value {
-        auto Result<HttpContentEncoding, HttpCompressionError>::Ok('selection) => match 'selection {
+        auto Result<HttpContentEncoding, HttpCompressionError>::Ok(selection) => match selection {
             auto HttpContentEncoding::Gzip() => return expected == 0:i32
             auto HttpContentEncoding::Identity() => return expected == 1:i32
             auto HttpContentEncoding::NotAcceptable() => return expected == 2:i32
@@ -20,7 +20,7 @@ fn selection_is(cede value: Result<HttpContentEncoding, HttpCompressionError>, e
 fn header_is(headers: HeaderMap, name: str, expected: str) -> bool {
     auto found = headers.get(name)
     match cede found {
-        auto Option<string>::Some('value) => return 'value.as_str().equals(expected)
+        auto Option<string>::Some(value) => return value.as_str().equals(expected)
         _ => return false
     }
 }

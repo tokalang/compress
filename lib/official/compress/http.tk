@@ -72,7 +72,7 @@ fn body_string(cede source: Bytes) -> string {
         result#.push_byte_raw(bytes.get(index))
         index = index + 1:usize
     }
-    return result
+    return cede result
 }
 
 fn append_bytes(target#: Vec<u8>, cede source: Bytes) {
@@ -135,8 +135,8 @@ fn parse_quality(value: str) -> Result<i32, HttpCompressionError> {
 pub fn negotiate_response_encoding(cede accept_encoding: Option<string>) -> Result<HttpContentEncoding, HttpCompressionError> {
     match cede accept_encoding {
         auto Option<string>::None => return Result<HttpContentEncoding, HttpCompressionError>::Ok(HttpContentEncoding::Gzip())
-        auto Option<string>::Some('value) => {
-            auto source# = string::from('value.as_str().trim())
+        auto Option<string>::Some(value) => {
+            auto source# = string::from(value.as_str().trim())
             if source.len() == 0:usize {
                 return Result<HttpContentEncoding, HttpCompressionError>::Ok(HttpContentEncoding::Identity())
             }
@@ -154,10 +154,9 @@ pub fn negotiate_response_encoding(cede accept_encoding: Option<string>) -> Resu
                     return Result<HttpContentEncoding, HttpCompressionError>::Err(policy_error("accept_encoding", "Accept-Encoding contains an empty directive"))
                 }
                 auto separator = find_byte(item, ';' as u8)
-                auto coding = if separator < 0:i32 {
-                    pass item
-                } else {
-                    pass item.substr(0:usize, separator as usize).trim()
+                auto coding# = item
+                if separator >= 0:i32 {
+                    coding = item.substr(0:usize, separator as usize).trim()
                 }
                 if coding.len() == 0:usize || !is_valid_header_name(coding) {
                     return Result<HttpContentEncoding, HttpCompressionError>::Err(policy_error("accept_encoding", "Accept-Encoding contains an invalid coding token"))
@@ -232,7 +231,7 @@ fn vary_accept_encoding(value: str) -> string {
         if emitted { result#.push_str(", ") }
         result#.push_str("Accept-Encoding")
     }
-    return result
+    return cede result
 }
 
 fn response_headers(cede source: HeaderMap, content_length: usize, gzip: bool) -> Result<HeaderMap, HttpCompressionError> {
@@ -292,8 +291,8 @@ fn request_headers(cede source: HeaderMap, content_length: usize) -> Result<Head
 fn response_allows_transform(response: HttpResponse) -> Result<(), HttpCompressionError> {
     auto existing = response.headers.get("content-encoding")
     match cede existing {
-        auto Option<string>::Some('value) => {
-            if !'value.as_str().eq_ignore_ascii_case("identity") {
+        auto Option<string>::Some(value) => {
+            if !value.as_str().eq_ignore_ascii_case("identity") {
                 return Result<(), HttpCompressionError>::Err(policy_error("already_encoded", "response already has a non-identity Content-Encoding"))
             }
         }
@@ -328,10 +327,10 @@ pub fn gzip_response(cede response: HttpResponse, level: i32) -> Result<HttpResp
     auto chunks# = Vec<u8>::new()
     auto first = encoder#.write(cede body_bytes(response.body.as_str()))
     if first.is_err() { return Result<HttpResponse, HttpCompressionError>::Err(compress_error("gzip response", first.unwrap_err())) }
-    append_bytes(chunks, cede first.unwrap())
+    append_bytes(chunks#, cede first.unwrap())
     auto final_chunk = encoder#.finish()
     if final_chunk.is_err() { return Result<HttpResponse, HttpCompressionError>::Err(compress_error("gzip response", final_chunk.unwrap_err())) }
-    append_bytes(chunks, cede final_chunk.unwrap())
+    append_bytes(chunks#, cede final_chunk.unwrap())
     auto compressed = Bytes::from_vec(cede chunks)
     auto headers = response_headers(cede response.headers#.clone(), compressed.len(), true)
     if headers.is_err() { return Result<HttpResponse, HttpCompressionError>::Err(headers.unwrap_err()) }
@@ -383,8 +382,8 @@ pub fn decode_gzip_request_body(cede request: HttpRequest, limits: GzipRequestLi
     auto request# = cede request
     auto encoding = request.headers.get("content-encoding")
     match cede encoding {
-        auto Option<string>::Some('value) => {
-            if !'value.as_str().eq_ignore_ascii_case("gzip") {
+        auto Option<string>::Some(value) => {
+            if !value.as_str().eq_ignore_ascii_case("gzip") {
                 return Result<HttpRequest, HttpCompressionError>::Err(policy_error("unsupported_encoding", "request Content-Encoding must be gzip"))
             }
         }
@@ -397,10 +396,10 @@ pub fn decode_gzip_request_body(cede request: HttpRequest, limits: GzipRequestLi
     auto chunks# = Vec<u8>::new()
     auto first = decoder#.write(cede body_bytes(request.body.as_str()))
     if first.is_err() { return Result<HttpRequest, HttpCompressionError>::Err(compress_error("gzip request", first.unwrap_err())) }
-    append_bytes(chunks, cede first.unwrap())
+    append_bytes(chunks#, cede first.unwrap())
     auto final_chunk = decoder#.finish()
     if final_chunk.is_err() { return Result<HttpRequest, HttpCompressionError>::Err(compress_error("gzip request", final_chunk.unwrap_err())) }
-    append_bytes(chunks, cede final_chunk.unwrap())
+    append_bytes(chunks#, cede final_chunk.unwrap())
     auto decoded = Bytes::from_vec(cede chunks)
     if compressed_len > 0:usize && decoded.len() > 0:usize &&
        (decoded.len() - 1:usize) / compressed_len >= limits.max_ratio {
